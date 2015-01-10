@@ -1,0 +1,4 @@
+all: fractals
+
+fractals: fractals.go poly.go
+	go build fractals.go poly.go

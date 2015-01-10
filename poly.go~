@@ -1,0 +1,193 @@
+package main
+
+import (
+	"fmt"
+	"math"
+	"math/cmplx"
+	"regexp"
+	"strconv"
+	"strings"
+)
+
+type Root struct {
+	base complex128
+	exp  complex128
+}
+
+func PlainRoot(base complex128) Root {
+	return Root{base, complex(1, 0)}
+}
+
+func NewRoot(base, exp complex128) Root {
+	return Root{base, exp}
+}
+
+type rootFunction func(t float64) Root
+
+var rootFunctions []rootFunction = []rootFunction{
+	func(t float64) Root {
+		whole, frac := math.Modf(4.0 * t)
+		tPrime := int(whole)
+		if tPrime == 0 {
+			return NewRoot(complex(1, 0), complex(frac, 0))
+		} else if tPrime == 1 {
+			return NewRoot(complex(1, 0), complex(1, frac))
+		} else if tPrime == 2 {
+			return NewRoot(complex(1, 0), complex((2.0-frac)/2.0, 1))
+		} else {
+			return NewRoot(complex(1, 0), complex(0.5, 1-frac))
+		}
+	},
+	func(t float64) Root {
+		return PlainRoot(complex(-0.5, -0.86603))
+	},
+	func(t float64) Root {
+		return PlainRoot(complex(-0.5, 0.86603))
+	},
+}
+
+func computePolynomial(time float64) Polynomial {
+	roots := make([]Root, len(rootFunctions))
+	for ix, rootFunc := range rootFunctions {
+		roots[ix] = rootFunc(time)
+	}
+	return Polynomial{roots}
+}
+
+func floatToString(x float64) string {
+	return strconv.FormatFloat(x, 'G', -1, 64)
+}
+
+func complexToString(c complex128) string {
+	realPart := floatToString(real(c))
+	if imag(c) == 0 {
+		return realPart
+	}
+	return realPart + ":" +
+		floatToString(imag(c))
+}
+
+func (r Root) String() string {
+	base := complexToString(r.base)
+	if r.exp == 1 {
+		return base
+	}
+	return base + "^" +
+		complexToString(r.exp)
+}
+
+type Polynomial struct {
+	roots []Root
+}
+
+func (p Polynomial) evaluateAt(x complex128) complex128 {
+	y := complex(1, 0)
+	for _, root := range p.roots {
+		y = y * cmplx.Pow(x-root.base, root.exp)
+	}
+	//fmt.Println("y: %v\n", y)
+	return y
+}
+
+func (p Polynomial) evaluateDeltaAt(x complex128) complex128 {
+	total := complex(0, 0)
+	for _, root := range p.roots {
+		total += root.exp * cmplx.Pow(x-root.base, -1)
+	}
+	//fmt.Println("total: %d\n", total)
+	return 1 / total
+}
+
+func (p Polynomial) Roots() []complex128 {
+	roots := make([]complex128, len(p.roots))
+	for ix, root := range p.roots {
+		roots[ix] = root.base
+	}
+	return roots
+}
+
+func (p Polynomial) closestRoot(x complex128) int8 {
+	ix := int8(-1)
+	diff := math.Inf(1)
+	for currIx, root := range p.roots {
+		currDiff := cmplx.Abs(x - root.base)
+		if currDiff < diff {
+			ix = int8(currIx)
+			diff = currDiff
+		}
+	}
+	return ix
+}
+
+func (p *Polynomial) Get() *Polynomial {
+	return p
+}
+
+func (p *Polynomial) String() string {
+	rootStrings := make([]string, len(p.roots))
+	for ix, root := range p.roots {
+		rootStrings[ix] = root.String()
+	}
+	return strings.Join(rootStrings, " ")
+}
+
+var polynomialParser *regexp.Regexp = regexp.MustCompile(
+	`[\d.eE+-]+(?::[\d.eE+-]+)?(?:\^[\d.eE+-]+(?::[\d.eE+-]+)?)?`)
+
+func (p *Polynomial) Set(s string) error {
+	matches := polynomialParser.FindAllString(s, -1)
+	if matches == nil {
+		return fmt.Errorf("Invalid polynomial provided: %s\n", s)
+	}
+	p.roots = make([]Root, len(matches))
+	for ix, match := range matches {
+		err := p.roots[ix].Set(match)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+var rootParser *regexp.Regexp = regexp.MustCompile(
+	`([\d.eE+-]+(?::[\d.eE+-]+)?)(\^[\d.eE+-]+(?::[\d.eE+-]+)?)?`)
+
+func (r *Root) Set(s string) error {
+	matches := rootParser.FindStringSubmatch(s)
+	if matches == nil {
+		return fmt.Errorf("Invalid root provided: %s\n", s)
+	}
+	base, err := parseComplex(matches[1])
+	if err != nil {
+		return err
+	}
+	r.base = base
+
+	r.exp = complex(1, 0)
+	if matches[2] != "" {
+		exp, err := parseComplex(matches[2][1:])
+		if err != nil {
+			return err
+		}
+		r.exp = exp
+	}
+	dynamicPolynomial = false
+	fmt.Printf("%v\n", r)
+	return nil
+}
+
+func parseComplex(s string) (complex128, error) {
+	floats := strings.Split(s, ":")
+	a, err := strconv.ParseFloat(floats[0], 64)
+	if err != nil {
+		return complex(0, 0), err
+	}
+	b := float64(0)
+	if len(floats) == 2 {
+		b, err = strconv.ParseFloat(floats[1], 64)
+		if err != nil {
+			return complex(0, 0), err
+		}
+	}
+	return complex(a, b), nil
+}

@@ -1,0 +1,91 @@
+#version 330
+
+const float maxDiffForFoundRoots = 1000.0;
+
+uniform vec2 windowSize;
+uniform vec2 viewOrigin;
+uniform float viewZoom;
+uniform int ul;
+uniform float epsilon;
+uniform int rootCount;
+uniform vec3 defaultRootColor;
+uniform vec2 rootBase[3];
+uniform vec3 rootColor[3];
+//uniform vec2 rootExp[10];
+out vec4 outColor;
+
+vec2 conj(vec2 z) { 
+  return vec2(z.x, -z.y);
+}
+
+float c_abs(vec2 z) { 
+  return dot(z, conj(z));
+}
+
+vec2 reciprocal(vec2 z) { 
+  return conj(z) / c_abs(z);
+}
+
+vec2 evaluateAt(vec2 z) { 
+  vec2 y = vec2(1.0, 0.0);
+  for (int i = 0; i < rootCount; i++) {
+    y *= z - rootBase[i];
+  }
+  return y;
+}
+
+vec2 evaluateDeltaAt(vec2 z) { 
+  vec2 total = vec2(0.0);
+  for (int i = 0; i < rootCount; i++) { 
+    total += reciprocal(z - rootBase[i]);
+  }
+  return reciprocal(total);
+}
+
+int closestRoot(vec2 z) {
+  int ix = -1;
+  float minDiff = 1.0 / 0.0;
+  for (int i = 0; i < rootCount; i++) { 
+    float currDiff = c_abs(z - rootBase[i]);
+    if (currDiff < minDiff) { 
+      ix = i;
+      minDiff = currDiff;
+    }
+  }
+  if (minDiff > maxDiffForFoundRoots) {
+    return -1;
+  }
+  return ix;
+}
+
+vec2 newtonRaphson(vec2 z) { 
+  vec2 y = evaluateAt(z);
+  int count = 0; 
+  while (c_abs(y) >= epsilon / viewZoom) { 
+    count += 1;
+    z = z - evaluateDeltaAt(z);
+    y = evaluateAt(z);
+    if (count == ul) { 
+      return vec2(count, -1.0);
+    }
+  }
+  return vec2(count, closestRoot(z));
+}
+
+
+void main()
+{
+    vec2 windowCoord = gl_FragCoord.xy / windowSize;
+    vec2 windowOriginOffset = windowCoord - vec2(0.5);
+    vec2 viewOriginOffset = windowOriginOffset / vec2(viewZoom);
+    vec2 location = viewOriginOffset + viewOrigin;
+    vec2 results = newtonRaphson(location);
+    float count = results.x;
+    int rootIx = int(results.y);
+    vec3 hue = defaultRootColor;
+    if (rootIx != -1) { 
+      hue = rootColor[rootIx];
+    }
+
+    outColor = vec4(hue, 1.0);
+}
