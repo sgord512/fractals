@@ -1,15 +1,3 @@
-// Copyright 2014 The go-gl Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
-
-// Originally put together by github.com/segfault88, but
-// I thought it might be useful to somebody else too.
-
-// It took me quite a lot of frustration and messing around
-// to get a basic example of glfw3 with modern OpenGL (3.3)
-// with shaders etc. working. Hopefully this will save you
-// some trouble. Enjoy!
-
 package main
 
 import (
@@ -21,12 +9,13 @@ import (
 )
 
 const (
-	ul                                        = 255
+	ul                                        = 256
 	epsilon                                   = 0.0001
 	fragmentShaderFile                        = "basic.frag"
 	vertexShaderFile                          = "basic.vert"
 	viewStepSize                              = 1.0 / 24.0
-	zoomBase                                  = 1.01
+	zoomBase                                  = 1.03
+	zoomLimit                                 = 10000
 	startingWindowWidth, startingWindowHeight = 800, 800
 )
 
@@ -35,16 +24,14 @@ type Point struct {
 }
 
 var (
-	poly             Polynomial
-	vbo              gl.Buffer
-	vao              gl.VertexArray
-	vertices         []float32
-	program          gl.Program
-	positionAttrib   gl.AttribLocation
-	rootColors       []float32
-	defaultRootColor []float32
-	viewOrigin       *Point
-	viewZoom         float64
+	poly           Polynomial
+	vbo            gl.Buffer
+	vao            gl.VertexArray
+	vertices       []float32
+	program        gl.Program
+	positionAttrib gl.AttribLocation
+	viewOrigin     *Point
+	viewZoom       float64
 )
 
 func draw() {
@@ -66,12 +53,6 @@ func setRoots() {
 
 	rootBaseLoc := program.GetUniformLocation("rootBase")
 	rootBaseLoc.Uniform2fv(rootCount, rootBaseArray)
-
-	rootColorLoc := program.GetUniformLocation("rootColor")
-	rootColorLoc.Uniform3fv(len(rootColors)/3, rootColors)
-
-	defaultRootColorLoc := program.GetUniformLocation("defaultRootColor")
-	defaultRootColorLoc.Uniform3fv(1, defaultRootColor)
 }
 
 func reshape(width, height int) {
@@ -93,11 +74,17 @@ func setupCamera() {
 func scroll(window *glfw.Window, xoff, yoff float64) {
 	fmt.Printf("yoff: %G\n", yoff)
 	fmt.Printf("viewZoom: %G\n", viewZoom)
-	viewZoom += yoff / 10
-	if viewZoom > 1000 {
-		viewZoom = 1000
-	} else if viewZoom < -1000 {
-		viewZoom = -1000
+	var delta float64
+	if math.Abs(yoff) < 1 {
+		delta = yoff / 10
+	} else {
+		delta = math.Abs(yoff) * yoff / 100
+	}
+	viewZoom += delta
+	if viewZoom > zoomLimit {
+		viewZoom = zoomLimit
+	} else if viewZoom < -zoomLimit {
+		viewZoom = -zoomLimit
 	}
 }
 
@@ -129,21 +116,49 @@ func key(window *glfw.Window, k glfw.Key, s int, action glfw.Action, mods glfw.M
 	}
 }
 
+func hsvToRgb(hsv [3]float32) [3]float32 {
+	hsv_x, hsv_y, hsv_z := hsv[0], hsv[1], hsv[2]
+	c := hsv_z * hsv_y
+	h := hsv_x * 6.0
+	x := c * (1 - float32(math.Abs(math.Mod(float64(h), 2)-1)))
+	m := hsv_z - c
+	var rgb [3]float32
+	if h < 1 {
+		rgb = [3]float32{c, x, 0}
+	} else if h < 2 {
+		rgb = [3]float32{x, c, 0}
+	} else if h < 3 {
+		rgb = [3]float32{0, c, x}
+	} else if h < 4 {
+		rgb = [3]float32{0, x, c}
+	} else if h < 5 {
+		rgb = [3]float32{x, 0, c}
+	} else {
+		rgb = [3]float32{c, 0, x}
+	}
+	rgb[0] += m
+	rgb[1] += m
+	rgb[2] += m
+	return rgb
+}
+
+func makeColormap() []float32 {
+	img := make([]float32, ul*3)
+	for i := 0; i < ul; i++ {
+		rgb := hsvToRgb([3]float32{float32(i) / (ul - 1), 1.0, 1.0})
+		img[3*i] = rgb[0]
+		img[3*i+1] = rgb[1]
+		img[3*i+2] = rgb[2]
+	}
+	return img
+}
+
 func init() {
 	poly = Polynomial{[]Root{
 		PlainRoot(complex(-0.5, -0.86603)),
 		PlainRoot(complex(-0.5, 0.86603)),
 		PlainRoot(complex(1, 0)),
 	}}
-
-	rootColors = []float32{
-		1.0, 0.0, 0.0,
-		0.0, 1.0, 0.0,
-		0.0, 0.0, 1.0,
-	}
-	defaultRootColor = []float32{
-		0.0, 0.0, 0.0,
-	}
 
 	viewOrigin = &Point{0.0, 0.0}
 	// viewZoom is the exponent used to compute magnification, so
@@ -197,6 +212,27 @@ func main() {
 
 	gl.BufferData(gl.ARRAY_BUFFER, len(vertices)*4, vertices, gl.STATIC_DRAW)
 
+	gl.Enable(gl.TEXTURE_1D)
+	colormap_texture := gl.GenTexture()
+	colormap_texture.Bind(gl.TEXTURE_1D)
+
+	gl.TexParameteri(gl.TEXTURE_1D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+	gl.TexParameteri(gl.TEXTURE_1D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+
+	gl.TexParameteri(gl.TEXTURE_1D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+	gl.TexParameteri(gl.TEXTURE_1D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+
+	pixels := makeColormap()
+	img := make([]uint8, len(pixels))
+	for ix, pix := range pixels {
+		img[ix] = uint8(math.Floor(float64(pix * (ul - 1))))
+	}
+	var imgArray [ul * 3]uint8
+	copy(imgArray[:], img[0:len(img)])
+	gl.TexImage1D(gl.TEXTURE_1D, 0, gl.RGB,
+		ul, 0, gl.RGB, gl.UNSIGNED_BYTE,
+		&imgArray)
+
 	vertex_shader := compileShader(vertexShaderFile, gl.VERTEX_SHADER)
 	defer vertex_shader.Delete()
 
@@ -211,6 +247,12 @@ func main() {
 	program.Link()
 	program.Use()
 	defer program.Delete()
+
+	gl.ActiveTexture(gl.TEXTURE0 + 0)
+	fmt.Printf("gl.TEXTURE0 is %d\n", gl.TEXTURE0)
+	colormap_texture.Bind(gl.TEXTURE_1D)
+	colormapLoc := program.GetUniformLocation("colormap")
+	colormapLoc.Uniform1i(0)
 
 	ulLoc := program.GetUniformLocation("ul")
 	ulLoc.Uniform1i(ul)
